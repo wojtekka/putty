@@ -717,6 +717,7 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                  */
                 s->agent_keyalg = s->agent_keys[s->agent_key_index].algorithm;
                 s->signflags = 0;
+                // TODO: upgrade ssh-rsa-cert-v01@openssh.com
                 if (ptrlen_eq_string(s->agent_keyalg, "ssh-rsa")) {
                     /* Try to upgrade ssh-rsa to one of the rsa-sha2-* family,
                      * if the server has announced support for them. */
@@ -849,6 +850,7 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                  *
                  * First, try to upgrade its algorithm.
                  */
+                // TODO: upgrade ssh-rsa-cert-v01@openssh.com
                 if (!strcmp(s->publickey_algorithm, "ssh-rsa")) {
                     /* Try to upgrade ssh-rsa to one of the rsa-sha2-* family,
                      * if the server has announced support for them. */
@@ -980,7 +982,7 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                 }
 
                 if (key) {
-                    strbuf *pkblob, *sigdata, *sigblob;
+                    strbuf *sigdata, *sigblob;
 
                     /*
                      * We have loaded the private key and the server
@@ -994,9 +996,8 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                     put_stringz(s->pktout, "publickey"); /* method */
                     put_bool(s->pktout, true); /* signature follows */
                     put_stringz(s->pktout, s->publickey_algorithm);
-                    pkblob = strbuf_new();
-                    ssh_key_public_blob(key->key, BinarySink_UPCAST(pkblob));
-                    put_string(s->pktout, pkblob->s, pkblob->len);
+                    put_string(s->pktout, s->publickey_blob->s,
+                           s->publickey_blob->len);
 
                     /*
                      * The data to be signed is:
@@ -1015,9 +1016,8 @@ static void ssh2_userauth_process_queue(PacketProtocolLayer *ppl)
                                  s->signflags, BinarySink_UPCAST(sigblob));
                     strbuf_free(sigdata);
                     ssh2_userauth_add_sigblob(
-                        s, s->pktout, ptrlen_from_strbuf(pkblob),
+                        s, s->pktout, ptrlen_from_strbuf(s->publickey_blob),
                         ptrlen_from_strbuf(sigblob));
-                    strbuf_free(pkblob);
                     strbuf_free(sigblob);
 
                     pq_push(s->ppl.out_pq, s->pktout);

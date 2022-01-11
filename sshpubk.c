@@ -563,6 +563,9 @@ const ssh_keyalg *const all_keyalgs[] = {
     &ssh_rsa,
     &ssh_rsa_sha256,
     &ssh_rsa_sha512,
+    &ssh_rsa_cert_v01,
+    &ssh_rsa_sha256_cert_v01,
+    &ssh_rsa_sha512_cert_v01,
     &ssh_dsa,
     &ssh_ecdsa_nistp256,
     &ssh_ecdsa_nistp384,
@@ -943,6 +946,8 @@ ssh2_userkey *ppk_load_s(BinarySource *src, const char *passphrase,
                 error = "wrong passphrase";
                 ret = SSH2_WRONG_PASSPHRASE;
             } else {
+                printf("MAC=%s\n", mac);
+                printf("real MAC=%s\n", realmac);
                 error = "MAC failed";
                 ret = NULL;
             }

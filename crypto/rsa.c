@@ -484,9 +484,12 @@ static ssh_key *rsa2_new_pub(const ssh_keyalg *self, ptrlen data)
     RSAKey *rsa;
 
     BinarySource_BARE_INIT_PL(src, data);
-    if (!ptrlen_eq_string(get_string(src), "ssh-rsa"))
+    ptrlen alg = get_string(src);
+    if (!ptrlen_eq_string(alg, "ssh-rsa") && !ptrlen_eq_string(alg, "ssh-rsa-cert-v01@openssh.com"))
         return NULL;
-
+    if (ptrlen_eq_string(alg, "ssh-rsa-cert-v01@openssh.com")) {
+        ptrlen nonce = get_string(src);
+    }
     rsa = snew(RSAKey);
     rsa->sshk.vt = self;
     rsa->exponent = get_mp_ssh2(src);
@@ -621,21 +624,22 @@ static int rsa2_pubkey_bits(const ssh_keyalg *self, ptrlen pub)
 }
 
 static inline const ssh_hashalg *rsa2_hash_alg_for_flags(
-    unsigned flags, const char **protocol_id_out)
+    unsigned flags, const char *ssh_id, const char **protocol_id_out)
 {
     const ssh_hashalg *halg;
     const char *protocol_id;
 
     if (flags & SSH_AGENT_RSA_SHA2_256) {
         halg = &ssh_sha256;
-        protocol_id = "rsa-sha2-256";
+        protocol_id = (ssh_id && strstr(ssh_id, "-cert-v01@openssh.com")) ? "rsa-sha2-256-cert-v01@openssh.com" : "rsa-sha2-256";
     } else if (flags & SSH_AGENT_RSA_SHA2_512) {
         halg = &ssh_sha512;
-        protocol_id = "rsa-sha2-512";
+        protocol_id = (ssh_id && strstr(ssh_id, "-cert-v01@openssh.com")) ? "rsa-sha2-512-cert-v01@openssh.com" : "rsa-sha2-512";
     } else {
         halg = &ssh_sha1;
-        protocol_id = "ssh-rsa";
+        protocol_id = (ssh_id && strstr(ssh_id, "-cert-v01@openssh.com")) ? "ssh-rsa-cert-v01@openssh.com" : "ssh-rsa";
     }
+    printf("SSH_ID=%s PROTOCOL_ID=%s\n", ssh_id, protocol_id);
 
     if (protocol_id_out)
         *protocol_id_out = protocol_id;
@@ -749,7 +753,7 @@ static bool rsa2_verify(ssh_key *key, ptrlen sig, ptrlen data)
     const struct ssh2_rsa_extra *extra =
         (const struct ssh2_rsa_extra *)key->vt->extra;
 
-    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(extra->signflags, NULL);
+    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(extra->signflags, NULL, NULL);
 
     /* Start by making sure the key is even long enough to encode a
      * signature. If not, everything fails to verify. */
@@ -803,7 +807,7 @@ static void rsa2_sign(ssh_key *key, ptrlen data,
         (const struct ssh2_rsa_extra *)key->vt->extra;
     flags |= extra->signflags;
 
-    halg = rsa2_hash_alg_for_flags(flags, &sign_alg_name);
+    halg = rsa2_hash_alg_for_flags(flags, NULL, &sign_alg_name);
 
     nbytes = (mp_get_nbits(rsa->modulus) + 7) / 8;
 
@@ -829,7 +833,7 @@ static char *rsa2_invalid(ssh_key *key, unsigned flags)
     RSAKey *rsa = container_of(key, RSAKey, sshk);
     size_t bits = mp_get_nbits(rsa->modulus), nbytes = (bits + 7) / 8;
     const char *sign_alg_name;
-    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(flags, &sign_alg_name);
+    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(flags, key->vt->ssh_id, &sign_alg_name);
     if (nbytes < rsa_pkcs1_length_of_fixed_parts(halg)) {
         return dupprintf(
             "%"SIZEu"-bit RSA key is too short to generate %s signatures",
@@ -867,9 +871,23 @@ const ssh_keyalg ssh_rsa = {
     .extra = &rsa_extra,
 };
 
+const ssh_keyalg ssh_rsa_cert_v01 = {
+    COMMON_KEYALG_FIELDS,
+    .ssh_id = "ssh-rsa-cert-v01@openssh.com",
+    .supported_flags = SSH_AGENT_RSA_SHA2_256 | SSH_AGENT_RSA_SHA2_512,
+    .extra = &rsa_extra,
+};
+
 const ssh_keyalg ssh_rsa_sha256 = {
     COMMON_KEYALG_FIELDS,
     .ssh_id = "rsa-sha2-256",
+    .supported_flags = 0,
+    .extra = &rsa_sha256_extra,
+};
+
+const ssh_keyalg ssh_rsa_sha256_cert_v01 = {
+    COMMON_KEYALG_FIELDS,
+    .ssh_id = "rsa-sha2-256-cert-v01@openssh.com",
     .supported_flags = 0,
     .extra = &rsa_sha256_extra,
 };
@@ -880,6 +898,14 @@ const ssh_keyalg ssh_rsa_sha512 = {
     .supported_flags = 0,
     .extra = &rsa_sha512_extra,
 };
+
+const ssh_keyalg ssh_rsa_sha512_cert_v01 = {
+    COMMON_KEYALG_FIELDS,
+    .ssh_id = "rsa-sha2-512-cert-v01@openssh.com",
+    .supported_flags = 0,
+    .extra = &rsa_sha512_extra,
+};
+
 
 RSAKey *ssh_rsakex_newkey(ptrlen data)
 {
