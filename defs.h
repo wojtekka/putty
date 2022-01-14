@@ -154,6 +154,7 @@ typedef struct ssh_kex ssh_kex;
 typedef struct ssh_kexes ssh_kexes;
 typedef struct ssh_keyalg ssh_keyalg;
 typedef struct ssh_key ssh_key;
+typedef struct ssh_cert ssh_cert;
 typedef struct ssh_compressor ssh_compressor;
 typedef struct ssh_decompressor ssh_decompressor;
 typedef struct ssh_compression_alg ssh_compression_alg;

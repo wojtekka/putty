@@ -325,6 +325,14 @@ struct ecsign_extra {
     const unsigned char *oid;
     int oidlen;
 
+    /* Flag indicating that the public key contains a certificate */
+    bool cert;
+
+    /* Signature algoritm id used in case of public key with a certificate,
+     * e.g. signature algoritm of "ssh-ed25519-cert-v01@openssh.com" is 
+     * simply "ssh-ed25519". */
+    const char *sign_id;
+
     /* Some EdDSA instances prefix a string to all hash preimages, to
      * disambiguate which signature variant they're being used with */
     ptrlen hash_prefix;
@@ -603,6 +611,9 @@ static void ecdsa_freekey(ssh_key *key)
         ecc_weierstrass_point_free(ek->publicKey);
     if (ek->privateKey)
         mp_free(ek->privateKey);
+    if (key->cert)
+        ssh_cert_free(key->cert);
+
     sfree(ek);
 }
 
@@ -614,6 +625,8 @@ static void eddsa_freekey(ssh_key *key)
         ecc_edwards_point_free(ek->publicKey);
     if (ek->privateKey)
         mp_free(ek->privateKey);
+    if (key->cert)
+        ssh_cert_free(key->cert);
     sfree(ek);
 }
 
@@ -635,16 +648,23 @@ static ssh_key *ecdsa_new_pub(const ssh_keyalg *alg, ptrlen data)
     BinarySource_BARE_INIT_PL(src, data);
     get_string(src);
 
+    ptrlen nonce;
+    if (extra->cert)
+        nonce = get_string(src);
+
     /* Curve name is duplicated for Weierstrass form */
     if (!ptrlen_eq_string(get_string(src), curve->name))
         return NULL;
 
     struct ecdsa_key *ek = snew(struct ecdsa_key);
     ek->sshk.vt = alg;
+    ek->sshk.cert = (extra->cert) ? ssh_cert_new(alg->ssh_id, nonce) : NULL;
     ek->curve = curve;
     ek->privateKey = NULL;
-
     ek->publicKey = get_wpoint(src, curve);
+    if (extra->cert)
+        ssh_cert_get(ek->sshk.cert, src);
+
     if (!ek->publicKey) {
         ecdsa_freekey(&ek->sshk);
         return NULL;
@@ -664,12 +684,19 @@ static ssh_key *eddsa_new_pub(const ssh_keyalg *alg, ptrlen data)
     BinarySource_BARE_INIT_PL(src, data);
     get_string(src);
 
+    ptrlen nonce;
+    if (extra->cert)
+        nonce = get_string(src);
+
     struct eddsa_key *ek = snew(struct eddsa_key);
     ek->sshk.vt = alg;
+    ek->sshk.cert = (extra->cert) ? ssh_cert_new(alg->ssh_id, nonce) : NULL;
     ek->curve = curve;
     ek->privateKey = NULL;
-
     ek->publicKey = get_epoint(src, curve);
+    if (extra->cert)
+        ssh_cert_get(ek->sshk.cert, src);
+
     if (!ek->publicKey) {
         eddsa_freekey(&ek->sshk);
         return NULL;
@@ -1143,7 +1170,7 @@ static void ecdsa_sign(ssh_key *key, ptrlen data,
     mp_free(kInv);
 
     /* Format the output */
-    put_stringz(bs, ek->sshk.vt->ssh_id);
+    put_stringz(bs, (extra->sign_id) ? extra->sign_id : ek->sshk.vt->ssh_id);
 
     strbuf *substr = strbuf_new();
     put_mp_ssh2(substr, r);
@@ -1230,7 +1257,7 @@ static void eddsa_sign(ssh_key *key, ptrlen data,
     mp_free(log_r);
 
     /* Format the output */
-    put_stringz(bs, ek->sshk.vt->ssh_id);
+    put_stringz(bs, (extra->sign_id) ? extra->sign_id : ek->sshk.vt->ssh_id);
     put_uint32(bs, r_enc->len + ek->curve->fieldBytes);
     put_data(bs, r_enc->u, r_enc->len);
     strbuf_free(r_enc);
@@ -1239,51 +1266,79 @@ static void eddsa_sign(ssh_key *key, ptrlen data,
     mp_free(s);
 }
 
+#define COMMON_EDDSA_KEYALG_FIELDS \
+    .new_pub = eddsa_new_pub,                   \
+    .new_priv = eddsa_new_priv,                 \
+    .new_priv_openssh = eddsa_new_priv_openssh, \
+    .freekey = eddsa_freekey,                   \
+    .invalid = ec_signkey_invalid,              \
+    .sign = eddsa_sign,                         \
+    .verify = eddsa_verify,                     \
+    .public_blob = eddsa_public_blob,           \
+    .private_blob = eddsa_private_blob,         \
+    .openssh_blob = eddsa_openssh_blob,         \
+    .cache_str = eddsa_cache_str,               \
+    .components = eddsa_components,             \
+    .pubkey_bits = ec_shared_pubkey_bits
+
 static const struct ecsign_extra sign_extra_ed25519 = {
     ec_ed25519, &ssh_sha512,
-    NULL, 0, PTRLEN_DECL_LITERAL(""),
+    NULL, 0, false, NULL, PTRLEN_DECL_LITERAL(""),
 };
 const ssh_keyalg ssh_ecdsa_ed25519 = {
-    .new_pub = eddsa_new_pub,
-    .new_priv = eddsa_new_priv,
-    .new_priv_openssh = eddsa_new_priv_openssh,
-    .freekey = eddsa_freekey,
-    .invalid = ec_signkey_invalid,
-    .sign = eddsa_sign,
-    .verify = eddsa_verify,
-    .public_blob = eddsa_public_blob,
-    .private_blob = eddsa_private_blob,
-    .openssh_blob = eddsa_openssh_blob,
-    .cache_str = eddsa_cache_str,
-    .components = eddsa_components,
-    .pubkey_bits = ec_shared_pubkey_bits,
+    COMMON_EDDSA_KEYALG_FIELDS,
     .ssh_id = "ssh-ed25519",
     .cache_id = "ssh-ed25519",
     .extra = &sign_extra_ed25519,
 };
 
+static const struct ecsign_extra sign_extra_ed25519_cert_v01 = {
+    ec_ed25519, &ssh_sha512,
+    NULL, 0, true, "ssh-ed25519", PTRLEN_DECL_LITERAL(""),
+};
+const ssh_keyalg ssh_ecdsa_ed25519_cert_v01 = {
+    COMMON_EDDSA_KEYALG_FIELDS,
+    .ssh_id = "ssh-ed25519-cert-v01@openssh.com",
+    .cache_id = "ssh-ed25519",
+    .extra = &sign_extra_ed25519_cert_v01,
+};
+
 static const struct ecsign_extra sign_extra_ed448 = {
     ec_ed448, &ssh_shake256_114bytes,
-    NULL, 0, PTRLEN_DECL_LITERAL("SigEd448\0\0"),
+    NULL, 0, false, NULL, PTRLEN_DECL_LITERAL("SigEd448\0\0"),
 };
 const ssh_keyalg ssh_ecdsa_ed448 = {
-    .new_pub = eddsa_new_pub,
-    .new_priv = eddsa_new_priv,
-    .new_priv_openssh = eddsa_new_priv_openssh,
-    .freekey = eddsa_freekey,
-    .invalid = ec_signkey_invalid,
-    .sign = eddsa_sign,
-    .verify = eddsa_verify,
-    .public_blob = eddsa_public_blob,
-    .private_blob = eddsa_private_blob,
-    .openssh_blob = eddsa_openssh_blob,
-    .cache_str = eddsa_cache_str,
-    .components = eddsa_components,
-    .pubkey_bits = ec_shared_pubkey_bits,
+    COMMON_EDDSA_KEYALG_FIELDS,
     .ssh_id = "ssh-ed448",
     .cache_id = "ssh-ed448",
     .extra = &sign_extra_ed448,
 };
+
+static const struct ecsign_extra sign_extra_ed448_cert_v01 = {
+    ec_ed448, &ssh_shake256_114bytes,
+    NULL, 0, true, "ssh-ed448", PTRLEN_DECL_LITERAL("SigEd448\0\0"),
+};
+const ssh_keyalg ssh_ecdsa_ed448_cert_v01 = {
+    COMMON_EDDSA_KEYALG_FIELDS,
+    .ssh_id = "ssh-ed448-cert-v01@openssh.com",
+    .cache_id = "ssh-ed448",
+    .extra = &sign_extra_ed448_cert_v01,
+};
+
+#define COMMON_ECDSA_KEYALG_FIELDS              \
+    .new_pub = ecdsa_new_pub,                   \
+    .new_priv = ecdsa_new_priv,                 \
+    .new_priv_openssh = ecdsa_new_priv_openssh, \
+    .freekey = ecdsa_freekey,                   \
+    .invalid = ec_signkey_invalid,              \
+    .sign = ecdsa_sign,                         \
+    .verify = ecdsa_verify,                     \
+    .public_blob = ecdsa_public_blob,           \
+    .private_blob = ecdsa_private_blob,         \
+    .openssh_blob = ecdsa_openssh_blob,         \
+    .cache_str = ecdsa_cache_str,               \
+    .components = ecdsa_components,             \
+    .pubkey_bits = ec_shared_pubkey_bits
 
 /* OID: 1.2.840.10045.3.1.7 (ansiX9p256r1) */
 static const unsigned char nistp256_oid[] = {
@@ -1291,25 +1346,24 @@ static const unsigned char nistp256_oid[] = {
 };
 static const struct ecsign_extra sign_extra_nistp256 = {
     ec_p256, &ssh_sha256,
-    nistp256_oid, lenof(nistp256_oid),
+    nistp256_oid, lenof(nistp256_oid), false, NULL,
 };
 const ssh_keyalg ssh_ecdsa_nistp256 = {
-    .new_pub = ecdsa_new_pub,
-    .new_priv = ecdsa_new_priv,
-    .new_priv_openssh = ecdsa_new_priv_openssh,
-    .freekey = ecdsa_freekey,
-    .invalid = ec_signkey_invalid,
-    .sign = ecdsa_sign,
-    .verify = ecdsa_verify,
-    .public_blob = ecdsa_public_blob,
-    .private_blob = ecdsa_private_blob,
-    .openssh_blob = ecdsa_openssh_blob,
-    .cache_str = ecdsa_cache_str,
-    .components = ecdsa_components,
-    .pubkey_bits = ec_shared_pubkey_bits,
+    COMMON_ECDSA_KEYALG_FIELDS,
     .ssh_id = "ecdsa-sha2-nistp256",
     .cache_id = "ecdsa-sha2-nistp256",
     .extra = &sign_extra_nistp256,
+};
+
+static const struct ecsign_extra sign_extra_nistp256_cert_v01 = {
+    ec_p256, &ssh_sha256,
+    nistp256_oid, lenof(nistp256_oid), true, "ecdsa-sha2-nistp256",
+};
+const ssh_keyalg ssh_ecdsa_nistp256_cert_v01 = {
+    COMMON_ECDSA_KEYALG_FIELDS,
+    .ssh_id = "ecdsa-sha2-nistp256-cert-v01@openssh.com",
+    .cache_id = "ecdsa-sha2-nistp256",
+    .extra = &sign_extra_nistp256_cert_v01,
 };
 
 /* OID: 1.3.132.0.34 (secp384r1) */
@@ -1318,26 +1372,26 @@ static const unsigned char nistp384_oid[] = {
 };
 static const struct ecsign_extra sign_extra_nistp384 = {
     ec_p384, &ssh_sha384,
-    nistp384_oid, lenof(nistp384_oid),
+    nistp384_oid, lenof(nistp384_oid), false, NULL,
 };
 const ssh_keyalg ssh_ecdsa_nistp384 = {
-    .new_pub = ecdsa_new_pub,
-    .new_priv = ecdsa_new_priv,
-    .new_priv_openssh = ecdsa_new_priv_openssh,
-    .freekey = ecdsa_freekey,
-    .invalid = ec_signkey_invalid,
-    .sign = ecdsa_sign,
-    .verify = ecdsa_verify,
-    .public_blob = ecdsa_public_blob,
-    .private_blob = ecdsa_private_blob,
-    .openssh_blob = ecdsa_openssh_blob,
-    .cache_str = ecdsa_cache_str,
-    .components = ecdsa_components,
-    .pubkey_bits = ec_shared_pubkey_bits,
+    COMMON_ECDSA_KEYALG_FIELDS,
     .ssh_id = "ecdsa-sha2-nistp384",
     .cache_id = "ecdsa-sha2-nistp384",
     .extra = &sign_extra_nistp384,
 };
+
+static const struct ecsign_extra sign_extra_nistp384_cert_v01 = {
+    ec_p384, &ssh_sha384,
+    nistp384_oid, lenof(nistp384_oid), true, "ecdsa-sha2-nistp384",
+};
+const ssh_keyalg ssh_ecdsa_nistp384_cert_v01 = {
+    COMMON_ECDSA_KEYALG_FIELDS,
+    .ssh_id = "ecdsa-sha2-nistp384-cert-v01@openssh.com",
+    .cache_id = "ecdsa-sha2-nistp384",
+    .extra = &sign_extra_nistp384,
+};
+
 
 /* OID: 1.3.132.0.35 (secp521r1) */
 static const unsigned char nistp521_oid[] = {
@@ -1345,25 +1399,24 @@ static const unsigned char nistp521_oid[] = {
 };
 static const struct ecsign_extra sign_extra_nistp521 = {
     ec_p521, &ssh_sha512,
-    nistp521_oid, lenof(nistp521_oid),
+    nistp521_oid, lenof(nistp521_oid), false, NULL,
 };
 const ssh_keyalg ssh_ecdsa_nistp521 = {
-    .new_pub = ecdsa_new_pub,
-    .new_priv = ecdsa_new_priv,
-    .new_priv_openssh = ecdsa_new_priv_openssh,
-    .freekey = ecdsa_freekey,
-    .invalid = ec_signkey_invalid,
-    .sign = ecdsa_sign,
-    .verify = ecdsa_verify,
-    .public_blob = ecdsa_public_blob,
-    .private_blob = ecdsa_private_blob,
-    .openssh_blob = ecdsa_openssh_blob,
-    .cache_str = ecdsa_cache_str,
-    .components = ecdsa_components,
-    .pubkey_bits = ec_shared_pubkey_bits,
+    COMMON_ECDSA_KEYALG_FIELDS,
     .ssh_id = "ecdsa-sha2-nistp521",
     .cache_id = "ecdsa-sha2-nistp521",
     .extra = &sign_extra_nistp521,
+};
+
+static const struct ecsign_extra sign_extra_nistp521_cert_v01 = {
+    ec_p521, &ssh_sha512,
+    nistp521_oid, lenof(nistp521_oid), true, "ecdsa-sha2-nistp521",
+};
+const ssh_keyalg ssh_ecdsa_nistp521_cert_v01 = {
+    COMMON_ECDSA_KEYALG_FIELDS,
+    .ssh_id = "ecdsa-sha2-nistp521-cert-v01@openssh.com",
+    .cache_id = "ecdsa-sha2-nistp521",
+    .extra = &sign_extra_nistp521_cert_v01,
 };
 
 /* ----------------------------------------------------------------------

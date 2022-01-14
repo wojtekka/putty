@@ -442,8 +442,24 @@ void ssh_spr_close(Ssh *ssh, SeatPromptResult spr, const char *context);
 #define SSH1_SUPPORTED_CIPHER_MASK \
     (0 SSH1_SUPPORTED_CIPHER_LIST(SSH1_CIPHER_LIST_MAKE_MASK))
 
+struct ssh_cert {
+    strbuf *nonce;
+    uint64_t serial;
+    uint32_t type;
+    strbuf *key_id;
+    strbuf *valid_principals;
+    uint64_t valid_after;
+    uint64_t valid_before;
+    strbuf *critical_options;
+    strbuf *extensions;
+    strbuf *reserved;
+    strbuf *signature_key;
+    strbuf *signature;
+};
+
 struct ssh_key {
     const ssh_keyalg *vt;
+    ssh_cert *cert;
 };
 
 struct RSAKey {
@@ -1036,17 +1052,23 @@ extern const ssh_kex ssh_ec_kex_nistp384;
 extern const ssh_kex ssh_ec_kex_nistp521;
 extern const ssh_kexes ssh_ecdh_kex;
 extern const ssh_keyalg ssh_dsa;
+extern const ssh_keyalg ssh_dsa_cert_v01;
 extern const ssh_keyalg ssh_rsa;
-extern const ssh_keyalg ssh_rsa_sha256;
-extern const ssh_keyalg ssh_rsa_sha512;
 extern const ssh_keyalg ssh_rsa_cert_v01;
+extern const ssh_keyalg ssh_rsa_sha256;
 extern const ssh_keyalg ssh_rsa_sha256_cert_v01;
+extern const ssh_keyalg ssh_rsa_sha512;
 extern const ssh_keyalg ssh_rsa_sha512_cert_v01;
 extern const ssh_keyalg ssh_ecdsa_ed25519;
+extern const ssh_keyalg ssh_ecdsa_ed25519_cert_v01;
 extern const ssh_keyalg ssh_ecdsa_ed448;
+extern const ssh_keyalg ssh_ecdsa_ed448_cert_v01;
 extern const ssh_keyalg ssh_ecdsa_nistp256;
+extern const ssh_keyalg ssh_ecdsa_nistp256_cert_v01;
 extern const ssh_keyalg ssh_ecdsa_nistp384;
+extern const ssh_keyalg ssh_ecdsa_nistp384_cert_v01;
 extern const ssh_keyalg ssh_ecdsa_nistp521;
+extern const ssh_keyalg ssh_ecdsa_nistp521_cert_v01;
 extern const ssh2_macalg ssh_hmac_md5;
 extern const ssh2_macalg ssh_hmac_sha1;
 extern const ssh2_macalg ssh_hmac_sha1_buggy;
@@ -1729,3 +1751,7 @@ bool ssh_transient_hostkey_cache_verify(
 bool ssh_transient_hostkey_cache_has(
     ssh_transient_hostkey_cache *thc, const ssh_keyalg *alg);
 bool ssh_transient_hostkey_cache_non_empty(ssh_transient_hostkey_cache *thc);
+
+ssh_cert *ssh_cert_new(const char *ssh_id, ptrlen nonce);
+void ssh_cert_get(ssh_cert *cert, BinarySource *src);
+void ssh_cert_free(ssh_cert *cert);

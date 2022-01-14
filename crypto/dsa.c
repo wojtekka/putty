@@ -10,6 +10,10 @@
 #include "mpint.h"
 #include "misc.h"
 
+struct dsa_extra {
+    bool cert;
+};
+
 static void dsa_freekey(ssh_key *key);    /* forward reference */
 
 static ssh_key *dsa_new_pub(const ssh_keyalg *self, ptrlen data)
@@ -18,16 +22,25 @@ static ssh_key *dsa_new_pub(const ssh_keyalg *self, ptrlen data)
     struct dsa_key *dsa;
 
     BinarySource_BARE_INIT_PL(src, data);
-    if (!ptrlen_eq_string(get_string(src), "ssh-dss"))
+    if (!ptrlen_eq_string(get_string(src), self->ssh_id))
         return NULL;
-
+    const struct dsa_extra *extra =
+        (const struct dsa_extra *)self->extra;
+    
+    ptrlen nonce;
+    if (extra->cert)
+        nonce = get_string(src);
+        
     dsa = snew(struct dsa_key);
-    dsa->sshk.vt = &ssh_dsa;
+    dsa->sshk.vt = self;
+    dsa->sshk.cert = (extra->cert) ? ssh_cert_new(self->ssh_id, nonce) : NULL;
     dsa->p = get_mp_ssh2(src);
     dsa->q = get_mp_ssh2(src);
     dsa->g = get_mp_ssh2(src);
     dsa->y = get_mp_ssh2(src);
     dsa->x = NULL;
+    if (extra->cert)
+        ssh_cert_get(dsa->sshk.cert, src);
 
     if (get_err(src) ||
         mp_eq_integer(dsa->p, 0) || mp_eq_integer(dsa->q, 0)) {
@@ -52,6 +65,8 @@ static void dsa_freekey(ssh_key *key)
         mp_free(dsa->y);
     if (dsa->x)
         mp_free(dsa->x);
+    if (key->cert)
+        ssh_cert_free(key->cert);
     sfree(dsa);
 }
 
@@ -240,7 +255,7 @@ static ssh_key *dsa_new_priv(const ssh_keyalg *self, ptrlen pub, ptrlen priv)
     unsigned char digest[20];
     mp_int *ytest;
 
-    sshk = dsa_new_pub(self, pub);
+    sshk = ssh_key_new_pub(self, pub);
     if (!sshk)
         return NULL;
 
@@ -323,7 +338,7 @@ static int dsa_pubkey_bits(const ssh_keyalg *self, ptrlen pub)
     struct dsa_key *dsa;
     int ret;
 
-    sshk = dsa_new_pub(self, pub);
+    sshk = ssh_key_new_pub(self, pub);
     if (!sshk)
         return -1;
 
@@ -484,20 +499,34 @@ static void dsa_sign(ssh_key *key, ptrlen data, unsigned flags, BinarySink *bs)
     mp_free(s);
 }
 
+static const struct dsa_extra
+    dsa_extra = { false },
+    dsa_extra_cert_v01 = { true };
+
+#define COMMON_KEYALG_FIELDS                    \
+    .new_pub = dsa_new_pub,                     \
+    .new_priv = dsa_new_priv,                   \
+    .new_priv_openssh = dsa_new_priv_openssh,   \
+    .freekey = dsa_freekey,                     \
+    .invalid = dsa_invalid,                     \
+    .sign = dsa_sign,                           \
+    .verify = dsa_verify,                       \
+    .public_blob = dsa_public_blob,             \
+    .private_blob = dsa_private_blob,           \
+    .openssh_blob = dsa_openssh_blob,           \
+    .cache_str = dsa_cache_str,                 \
+    .components = dsa_components,               \
+    .pubkey_bits = dsa_pubkey_bits,             \
+    .cache_id = "dss"
+
 const ssh_keyalg ssh_dsa = {
-    .new_pub = dsa_new_pub,
-    .new_priv = dsa_new_priv,
-    .new_priv_openssh = dsa_new_priv_openssh,
-    .freekey = dsa_freekey,
-    .invalid = dsa_invalid,
-    .sign = dsa_sign,
-    .verify = dsa_verify,
-    .public_blob = dsa_public_blob,
-    .private_blob = dsa_private_blob,
-    .openssh_blob = dsa_openssh_blob,
-    .cache_str = dsa_cache_str,
-    .components = dsa_components,
-    .pubkey_bits = dsa_pubkey_bits,
+    COMMON_KEYALG_FIELDS,
     .ssh_id = "ssh-dss",
-    .cache_id = "dss",
+    .extra = &dsa_extra,
+};
+
+const ssh_keyalg ssh_dsa_cert_v01 = {
+    COMMON_KEYALG_FIELDS,
+    .ssh_id = "ssh-dss-cert-v01@openssh.com",
+    .extra = &dsa_extra_cert_v01,
 };

@@ -7,6 +7,7 @@ add_sources_from_current_dir(crypto
   bcrypt.c
   blake2.c
   blowfish.c
+  cert.c
   chacha20-poly1305.c
   crc32.c
   des.c

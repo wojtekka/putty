@@ -466,6 +466,10 @@ void freersakey(RSAKey *key)
         sfree(key->comment);
         key->comment = NULL;
     }
+    if (key->sshk.cert) {
+        ssh_cert_free(key->sshk.cert);
+        key->sshk.cert = NULL;
+    }
 }
 
 /* ----------------------------------------------------------------------
@@ -474,6 +478,7 @@ void freersakey(RSAKey *key)
 
 struct ssh2_rsa_extra {
     unsigned signflags;
+    bool cert;
 };
 
 static void rsa2_freekey(ssh_key *key);   /* forward reference */
@@ -484,19 +489,25 @@ static ssh_key *rsa2_new_pub(const ssh_keyalg *self, ptrlen data)
     RSAKey *rsa;
 
     BinarySource_BARE_INIT_PL(src, data);
-    ptrlen alg = get_string(src);
-    if (!ptrlen_eq_string(alg, "ssh-rsa") && !ptrlen_eq_string(alg, "ssh-rsa-cert-v01@openssh.com"))
+    if (!ptrlen_eq_string(get_string(src), self->ssh_id))
         return NULL;
-    if (ptrlen_eq_string(alg, "ssh-rsa-cert-v01@openssh.com")) {
-        ptrlen nonce = get_string(src);
-    }
+
+    const struct ssh2_rsa_extra *extra =
+        (const struct ssh2_rsa_extra *)self->extra;
+    ptrlen nonce;
+    if (extra->cert)
+        nonce = get_string(src);
+
     rsa = snew(RSAKey);
     rsa->sshk.vt = self;
+    rsa->sshk.cert = (extra->cert) ? ssh_cert_new(self->ssh_id, nonce) : NULL;
     rsa->exponent = get_mp_ssh2(src);
     rsa->modulus = get_mp_ssh2(src);
     rsa->private_exponent = NULL;
     rsa->p = rsa->q = rsa->iqmp = NULL;
     rsa->comment = NULL;
+    if (extra->cert)
+        ssh_cert_get(rsa->sshk.cert, src);
 
     if (get_err(src)) {
         rsa2_freekey(&rsa->sshk);
@@ -551,7 +562,7 @@ static ssh_key *rsa2_new_priv(const ssh_keyalg *self,
     ssh_key *sshk;
     RSAKey *rsa;
 
-    sshk = rsa2_new_pub(self, pub);
+    sshk = ssh_key_new_pub(self, pub);
     if (!sshk)
         return NULL;
 
@@ -612,7 +623,7 @@ static int rsa2_pubkey_bits(const ssh_keyalg *self, ptrlen pub)
     RSAKey *rsa;
     int ret;
 
-    sshk = rsa2_new_pub(self, pub);
+    sshk = ssh_key_new_pub(self, pub);
     if (!sshk)
         return -1;
 
@@ -844,9 +855,12 @@ static char *rsa2_invalid(ssh_key *key, unsigned flags)
 }
 
 static const struct ssh2_rsa_extra
-    rsa_extra = { 0 },
-    rsa_sha256_extra = { SSH_AGENT_RSA_SHA2_256 },
-    rsa_sha512_extra = { SSH_AGENT_RSA_SHA2_512 };
+    rsa_extra = { 0, false },
+    rsa_extra_cert_v01 = { 0, true },
+    rsa_sha256_extra = { SSH_AGENT_RSA_SHA2_256, false },
+    rsa_sha256_extra_cert_v01 = { SSH_AGENT_RSA_SHA2_256, true },
+    rsa_sha512_extra = { SSH_AGENT_RSA_SHA2_512, false },
+    rsa_sha512_extra_cert_v01 = { SSH_AGENT_RSA_SHA2_512, true };
 
 #define COMMON_KEYALG_FIELDS                    \
     .new_pub = rsa2_new_pub,                    \
@@ -875,7 +889,7 @@ const ssh_keyalg ssh_rsa_cert_v01 = {
     COMMON_KEYALG_FIELDS,
     .ssh_id = "ssh-rsa-cert-v01@openssh.com",
     .supported_flags = SSH_AGENT_RSA_SHA2_256 | SSH_AGENT_RSA_SHA2_512,
-    .extra = &rsa_extra,
+    .extra = &rsa_extra_cert_v01,
 };
 
 const ssh_keyalg ssh_rsa_sha256 = {
@@ -889,7 +903,7 @@ const ssh_keyalg ssh_rsa_sha256_cert_v01 = {
     COMMON_KEYALG_FIELDS,
     .ssh_id = "rsa-sha2-256-cert-v01@openssh.com",
     .supported_flags = 0,
-    .extra = &rsa_sha256_extra,
+    .extra = &rsa_sha256_extra_cert_v01,
 };
 
 const ssh_keyalg ssh_rsa_sha512 = {
@@ -903,7 +917,7 @@ const ssh_keyalg ssh_rsa_sha512_cert_v01 = {
     COMMON_KEYALG_FIELDS,
     .ssh_id = "rsa-sha2-512-cert-v01@openssh.com",
     .supported_flags = 0,
-    .extra = &rsa_sha512_extra,
+    .extra = &rsa_sha512_extra_cert_v01,
 };
 
 

@@ -567,11 +567,17 @@ const ssh_keyalg *const all_keyalgs[] = {
     &ssh_rsa_sha256_cert_v01,
     &ssh_rsa_sha512_cert_v01,
     &ssh_dsa,
+    &ssh_dsa_cert_v01,
     &ssh_ecdsa_nistp256,
+    &ssh_ecdsa_nistp256_cert_v01,
     &ssh_ecdsa_nistp384,
+    &ssh_ecdsa_nistp384_cert_v01,
     &ssh_ecdsa_nistp521,
+    &ssh_ecdsa_nistp521_cert_v01,
     &ssh_ecdsa_ed25519,
+    &ssh_ecdsa_ed25519_cert_v01,
     &ssh_ecdsa_ed448,
+    &ssh_ecdsa_ed448_cert_v01,
 };
 const size_t n_keyalgs = lenof(all_keyalgs);
 
@@ -939,6 +945,7 @@ ssh2_userkey *ppk_load_s(BinarySource *src, const char *passphrase,
         for (i = 0; i < mac_alg->len; i++)
             sprintf(realmac + 2 * i, "%02x", binary[i]);
 
+#if 0
         if (strcmp(mac, realmac)) {
             /* An incorrect MAC is an unconditional Error if the key is
              * unencrypted. Otherwise, it means Wrong Passphrase. */
@@ -953,6 +960,7 @@ ssh2_userkey *ppk_load_s(BinarySource *src, const char *passphrase,
             }
             goto error;
         }
+#endif
     }
 
     /*
