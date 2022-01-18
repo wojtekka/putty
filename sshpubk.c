@@ -945,7 +945,6 @@ ssh2_userkey *ppk_load_s(BinarySource *src, const char *passphrase,
         for (i = 0; i < mac_alg->len; i++)
             sprintf(realmac + 2 * i, "%02x", binary[i]);
 
-#if 0
         if (strcmp(mac, realmac)) {
             /* An incorrect MAC is an unconditional Error if the key is
              * unencrypted. Otherwise, it means Wrong Passphrase. */
@@ -953,14 +952,11 @@ ssh2_userkey *ppk_load_s(BinarySource *src, const char *passphrase,
                 error = "wrong passphrase";
                 ret = SSH2_WRONG_PASSPHRASE;
             } else {
-                printf("MAC=%s\n", mac);
-                printf("real MAC=%s\n", realmac);
                 error = "MAC failed";
                 ret = NULL;
             }
             goto error;
         }
-#endif
     }
 
     /*

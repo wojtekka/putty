@@ -1752,6 +1752,8 @@ bool ssh_transient_hostkey_cache_has(
     ssh_transient_hostkey_cache *thc, const ssh_keyalg *alg);
 bool ssh_transient_hostkey_cache_non_empty(ssh_transient_hostkey_cache *thc);
 
-ssh_cert *ssh_cert_new(const char *ssh_id, ptrlen nonce);
-void ssh_cert_get(ssh_cert *cert, BinarySource *src);
+ssh_cert *ssh_cert_get_prefix(BinarySource *src);
+void ssh_cert_get_suffix(ssh_cert *cert, BinarySource *src);
+void ssh_cert_put_prefix(ssh_cert *cert, BinarySink *sink);
+void ssh_cert_put_suffix(ssh_cert *cert, BinarySink *sink);
 void ssh_cert_free(ssh_cert *cert);

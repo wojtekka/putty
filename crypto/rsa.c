@@ -487,27 +487,28 @@ static ssh_key *rsa2_new_pub(const ssh_keyalg *self, ptrlen data)
 {
     BinarySource src[1];
     RSAKey *rsa;
+    ssh_cert *cert = NULL;
+    const struct ssh2_rsa_extra *extra =
+        (const struct ssh2_rsa_extra *)self->extra;  
 
     BinarySource_BARE_INIT_PL(src, data);
     if (!ptrlen_eq_string(get_string(src), self->ssh_id))
         return NULL;
 
-    const struct ssh2_rsa_extra *extra =
-        (const struct ssh2_rsa_extra *)self->extra;
-    ptrlen nonce;
     if (extra->cert)
-        nonce = get_string(src);
-
+        cert = ssh_cert_get_prefix(src);
+    
     rsa = snew(RSAKey);
     rsa->sshk.vt = self;
-    rsa->sshk.cert = (extra->cert) ? ssh_cert_new(self->ssh_id, nonce) : NULL;
+    rsa->sshk.cert = cert;
     rsa->exponent = get_mp_ssh2(src);
     rsa->modulus = get_mp_ssh2(src);
     rsa->private_exponent = NULL;
     rsa->p = rsa->q = rsa->iqmp = NULL;
     rsa->comment = NULL;
+    
     if (extra->cert)
-        ssh_cert_get(rsa->sshk.cert, src);
+        ssh_cert_get_suffix(cert, src);
 
     if (get_err(src)) {
         rsa2_freekey(&rsa->sshk);
@@ -540,9 +541,16 @@ static void rsa2_public_blob(ssh_key *key, BinarySink *bs)
 {
     RSAKey *rsa = container_of(key, RSAKey, sshk);
 
-    put_stringz(bs, "ssh-rsa");
+    put_stringz(bs, ssh_key_ssh_id(key));
+
+    if (key->cert)
+        ssh_cert_put_prefix(key->cert, bs);
+
     put_mp_ssh2(bs, rsa->exponent);
     put_mp_ssh2(bs, rsa->modulus);
+
+    if (key->cert)
+        ssh_cert_put_suffix(key->cert, bs);
 }
 
 static void rsa2_private_blob(ssh_key *key, BinarySink *bs)
@@ -588,6 +596,7 @@ static ssh_key *rsa2_new_priv_openssh(const ssh_keyalg *self,
 
     rsa = snew(RSAKey);
     rsa->sshk.vt = &ssh_rsa;
+    rsa->sshk.cert = NULL;
     rsa->comment = NULL;
 
     rsa->modulus = get_mp_ssh2(src);
@@ -635,22 +644,21 @@ static int rsa2_pubkey_bits(const ssh_keyalg *self, ptrlen pub)
 }
 
 static inline const ssh_hashalg *rsa2_hash_alg_for_flags(
-    unsigned flags, const char *ssh_id, const char **protocol_id_out)
+    unsigned flags, const char **protocol_id_out)
 {
     const ssh_hashalg *halg;
     const char *protocol_id;
 
     if (flags & SSH_AGENT_RSA_SHA2_256) {
         halg = &ssh_sha256;
-        protocol_id = (ssh_id && strstr(ssh_id, "-cert-v01@openssh.com")) ? "rsa-sha2-256-cert-v01@openssh.com" : "rsa-sha2-256";
+        protocol_id = "rsa-sha2-256";
     } else if (flags & SSH_AGENT_RSA_SHA2_512) {
         halg = &ssh_sha512;
-        protocol_id = (ssh_id && strstr(ssh_id, "-cert-v01@openssh.com")) ? "rsa-sha2-512-cert-v01@openssh.com" : "rsa-sha2-512";
+        protocol_id = "rsa-sha2-512";
     } else {
         halg = &ssh_sha1;
-        protocol_id = (ssh_id && strstr(ssh_id, "-cert-v01@openssh.com")) ? "ssh-rsa-cert-v01@openssh.com" : "ssh-rsa";
+        protocol_id = "ssh-rsa";
     }
-    printf("SSH_ID=%s PROTOCOL_ID=%s\n", ssh_id, protocol_id);
 
     if (protocol_id_out)
         *protocol_id_out = protocol_id;
@@ -764,7 +772,7 @@ static bool rsa2_verify(ssh_key *key, ptrlen sig, ptrlen data)
     const struct ssh2_rsa_extra *extra =
         (const struct ssh2_rsa_extra *)key->vt->extra;
 
-    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(extra->signflags, NULL, NULL);
+    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(extra->signflags, NULL);
 
     /* Start by making sure the key is even long enough to encode a
      * signature. If not, everything fails to verify. */
@@ -818,7 +826,7 @@ static void rsa2_sign(ssh_key *key, ptrlen data,
         (const struct ssh2_rsa_extra *)key->vt->extra;
     flags |= extra->signflags;
 
-    halg = rsa2_hash_alg_for_flags(flags, NULL, &sign_alg_name);
+    halg = rsa2_hash_alg_for_flags(flags, &sign_alg_name);
 
     nbytes = (mp_get_nbits(rsa->modulus) + 7) / 8;
 
@@ -844,7 +852,7 @@ static char *rsa2_invalid(ssh_key *key, unsigned flags)
     RSAKey *rsa = container_of(key, RSAKey, sshk);
     size_t bits = mp_get_nbits(rsa->modulus), nbytes = (bits + 7) / 8;
     const char *sign_alg_name;
-    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(flags, key->vt->ssh_id, &sign_alg_name);
+    const ssh_hashalg *halg = rsa2_hash_alg_for_flags(flags, &sign_alg_name);
     if (nbytes < rsa_pkcs1_length_of_fixed_parts(halg)) {
         return dupprintf(
             "%"SIZEu"-bit RSA key is too short to generate %s signatures",

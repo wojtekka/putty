@@ -20,27 +20,28 @@ static ssh_key *dsa_new_pub(const ssh_keyalg *self, ptrlen data)
 {
     BinarySource src[1];
     struct dsa_key *dsa;
+    struct ssh_cert *cert = NULL;
+    const struct dsa_extra *extra =
+        (const struct dsa_extra *)self->extra;
 
     BinarySource_BARE_INIT_PL(src, data);
     if (!ptrlen_eq_string(get_string(src), self->ssh_id))
         return NULL;
-    const struct dsa_extra *extra =
-        (const struct dsa_extra *)self->extra;
-    
-    ptrlen nonce;
+
     if (extra->cert)
-        nonce = get_string(src);
-        
+        cert = ssh_cert_get_prefix(src);
+
     dsa = snew(struct dsa_key);
     dsa->sshk.vt = self;
-    dsa->sshk.cert = (extra->cert) ? ssh_cert_new(self->ssh_id, nonce) : NULL;
+    dsa->sshk.cert = cert;
     dsa->p = get_mp_ssh2(src);
     dsa->q = get_mp_ssh2(src);
     dsa->g = get_mp_ssh2(src);
     dsa->y = get_mp_ssh2(src);
     dsa->x = NULL;
+
     if (extra->cert)
-        ssh_cert_get(dsa->sshk.cert, src);
+        ssh_cert_get_suffix(cert, src);
 
     if (get_err(src) ||
         mp_eq_integer(dsa->p, 0) || mp_eq_integer(dsa->q, 0)) {
@@ -232,11 +233,18 @@ static void dsa_public_blob(ssh_key *key, BinarySink *bs)
 {
     struct dsa_key *dsa = container_of(key, struct dsa_key, sshk);
 
-    put_stringz(bs, "ssh-dss");
+    put_stringz(bs, ssh_key_ssh_id(key));
+
+    if (key->cert)
+        ssh_cert_put_prefix(key->cert, bs);
+
     put_mp_ssh2(bs, dsa->p);
     put_mp_ssh2(bs, dsa->q);
     put_mp_ssh2(bs, dsa->g);
     put_mp_ssh2(bs, dsa->y);
+
+    if (key->cert)
+        ssh_cert_put_suffix(key->cert, bs);
 }
 
 static void dsa_private_blob(ssh_key *key, BinarySink *bs)
@@ -304,6 +312,7 @@ static ssh_key *dsa_new_priv_openssh(const ssh_keyalg *self,
 
     dsa = snew(struct dsa_key);
     dsa->sshk.vt = &ssh_dsa;
+    dsa->sshk.cert = NULL;
 
     dsa->p = get_mp_ssh2(src);
     dsa->q = get_mp_ssh2(src);

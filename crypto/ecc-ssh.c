@@ -643,27 +643,30 @@ static ssh_key *ecdsa_new_pub(const ssh_keyalg *alg, ptrlen data)
         (const struct ecsign_extra *)alg->extra;
     struct ec_curve *curve = extra->curve();
     assert(curve->type == EC_WEIERSTRASS);
+    ssh_cert *cert = NULL;
 
     BinarySource src[1];
     BinarySource_BARE_INIT_PL(src, data);
     get_string(src);
 
-    ptrlen nonce;
     if (extra->cert)
-        nonce = get_string(src);
+        cert = ssh_cert_get_prefix(src);
 
     /* Curve name is duplicated for Weierstrass form */
-    if (!ptrlen_eq_string(get_string(src), curve->name))
+    if (!ptrlen_eq_string(get_string(src), curve->name)) {
+        ssh_cert_free(cert);
         return NULL;
+    }
 
     struct ecdsa_key *ek = snew(struct ecdsa_key);
     ek->sshk.vt = alg;
-    ek->sshk.cert = (extra->cert) ? ssh_cert_new(alg->ssh_id, nonce) : NULL;
+    ek->sshk.cert = cert;
     ek->curve = curve;
     ek->privateKey = NULL;
     ek->publicKey = get_wpoint(src, curve);
+
     if (extra->cert)
-        ssh_cert_get(ek->sshk.cert, src);
+        ssh_cert_get_suffix(ek->sshk.cert, src);
 
     if (!ek->publicKey) {
         ecdsa_freekey(&ek->sshk);
@@ -679,23 +682,24 @@ static ssh_key *eddsa_new_pub(const ssh_keyalg *alg, ptrlen data)
         (const struct ecsign_extra *)alg->extra;
     struct ec_curve *curve = extra->curve();
     assert(curve->type == EC_EDWARDS);
+    struct ssh_cert *cert = NULL;
 
     BinarySource src[1];
     BinarySource_BARE_INIT_PL(src, data);
     get_string(src);
 
-    ptrlen nonce;
     if (extra->cert)
-        nonce = get_string(src);
+        cert = ssh_cert_get_prefix(src);
 
     struct eddsa_key *ek = snew(struct eddsa_key);
     ek->sshk.vt = alg;
-    ek->sshk.cert = (extra->cert) ? ssh_cert_new(alg->ssh_id, nonce) : NULL;
+    ek->sshk.cert = cert;
     ek->curve = curve;
     ek->privateKey = NULL;
     ek->publicKey = get_epoint(src, curve);
+
     if (extra->cert)
-        ssh_cert_get(ek->sshk.cert, src);
+        ssh_cert_get_suffix(ek->sshk.cert, src);
 
     if (!ek->publicKey) {
         eddsa_freekey(&ek->sshk);
@@ -793,8 +797,15 @@ static void ecdsa_public_blob(ssh_key *key, BinarySink *bs)
     struct ecdsa_key *ek = container_of(key, struct ecdsa_key, sshk);
 
     put_stringz(bs, ek->sshk.vt->ssh_id);
+
+    if (key->cert)
+        ssh_cert_put_prefix(key->cert, bs);
+
     put_stringz(bs, ek->curve->name);
     put_wpoint(bs, ek->publicKey, ek->curve, false);
+
+    if (key->cert)
+        ssh_cert_put_suffix(key->cert, bs);
 }
 
 static void eddsa_public_blob(ssh_key *key, BinarySink *bs)
@@ -802,7 +813,14 @@ static void eddsa_public_blob(ssh_key *key, BinarySink *bs)
     struct eddsa_key *ek = container_of(key, struct eddsa_key, sshk);
 
     put_stringz(bs, ek->sshk.vt->ssh_id);
+
+    if (key->cert)
+        ssh_cert_put_prefix(key->cert, bs);
+
     put_epoint(bs, ek->publicKey, ek->curve, false);
+
+    if (key->cert)
+        ssh_cert_put_suffix(key->cert, bs);
 }
 
 static void ecdsa_private_blob(ssh_key *key, BinarySink *bs)

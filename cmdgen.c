@@ -136,6 +136,7 @@ void help(void)
            "  -l    equivalent to `-O fingerprint'\n"
            "  -L    equivalent to `-O public-openssh'\n"
            "  -p    equivalent to `-O public'\n"
+           "  --cert file          load a public key with certificate\n"
            "  --dump   equivalent to `-O text'\n"
            "  --reencrypt          load a key and save it with fresh "
            "encryption\n"
@@ -255,6 +256,7 @@ int main(int argc, char **argv)
     bool strong_rsa = false;
     ppk_save_parameters params = ppk_save_default_parameters;
     FingerprintType fptype = SSH_FPTYPE_DEFAULT;
+    char *certificate = NULL;
 
     if (is_interactive())
         progress_fp = stderr;
@@ -327,6 +329,16 @@ int main(int argc, char **argv)
                         /* support --pgpfp for consistency */
                         pgp_fingerprints();
                         nogo = true;
+                      }
+                    } else if (!strcmp(opt, "-cert")) {
+                      if (!val && argc > 1)
+                          --argc, val = *++argv;
+                      if (!val) {
+                        errs = true;
+                        fprintf(stderr, "puttygen: option `-%s'"
+                                " expects an argument\n", opt);
+                      } else {
+                        certificate = val;
                       }
                     } else if (!strcmp(opt, "-old-passphrase")) {
                       if (!val && argc > 1)
@@ -1047,9 +1059,64 @@ int main(int argc, char **argv)
           case SSH_KEYTYPE_SSHCOM:
             ssh2key = import_ssh2_s(infile_bs, intype, old_passphrase, &error);
             if (ssh2key) {
-                if (ssh2key != SSH2_WRONG_PASSPHRASE)
+                if (ssh2key != SSH2_WRONG_PASSPHRASE) {
                     error = NULL;
-                else
+
+                    /* Load certificate if requested */
+                    if (certificate != NULL) {
+                        const char *load_error;
+
+                        LoadedFile *certificate_lf;
+                        if (!strcmp(certificate, "-"))
+                            certificate_lf = lf_load_keyfile_fp(stdin, &load_error);
+                        else {
+                            Filename *certfilename = filename_from_str(certificate);
+                            certificate_lf = lf_load_keyfile(certfilename, &load_error);
+                            filename_free(certfilename);
+                        }
+
+                        if (!certificate_lf) {
+                            fprintf(stderr, "puttygen: unable to load file `%s': %s\n",
+                                    certificate, load_error);
+                            RETURN(1);
+                        }
+
+                        BinarySource *certificate_bs = BinarySource_UPCAST(certificate_lf);
+                        
+                        strbuf *blob = strbuf_new();
+                        if (ppk_loadpub_s(certificate_bs, &ssh2alg,
+                                        BinarySink_UPCAST(blob),
+                                        &origcomment, &error)) {
+                            const ssh_keyalg *alg = find_pubkey_alg(ssh2alg);
+                            if (alg) {
+                                ssh_key *pubkey = ssh_key_new_pub(alg, ptrlen_from_strbuf(blob));
+                                if (pubkey) {
+                                    if (pubkey->cert) {
+                                        if (ssh2key->key->cert)
+                                            ssh_cert_free(ssh2key->key->cert);
+                                        ssh2key->key->cert = pubkey->cert;
+                                        pubkey->cert = NULL;
+                                        // XXX what if key types are incompatible?
+                                        ssh2key->key->vt = pubkey->vt;
+                                    } else {
+                                        error = "public key contains no certificate";
+                                    }
+                                    ssh_key_free(pubkey);
+                                } else {
+                                    error = "error reading public key";
+                                }
+                            } else {
+                                error = "public key not recognized";
+                            }
+                        }
+                        if (blob)
+                            strbuf_free(blob);
+                        sfree(ssh2alg);
+
+                        if (certificate_lf)
+                            lf_free(certificate_lf);
+                    }
+                } else
                     error = "wrong passphrase";
             } else if (!error)
                 error = "unknown error";

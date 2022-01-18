@@ -16,11 +16,10 @@ static strbuf *get_strbuf(BinarySource *src)
     return res;
 }
 
-ssh_cert *ssh_cert_new(const char *ssh_id, ptrlen nonce)
+ssh_cert *ssh_cert_get_prefix(BinarySource *src)
 {
     ssh_cert *cert = snew(ssh_cert);
-    cert->nonce = strbuf_new();
-    put_datapl(cert->nonce, nonce);
+    cert->nonce = get_strbuf(src);
     cert->serial = 0;
     cert->type = 0;
     cert->key_id = NULL;
@@ -32,9 +31,10 @@ ssh_cert *ssh_cert_new(const char *ssh_id, ptrlen nonce)
     cert->reserved = NULL;
     cert->signature_key = NULL;
     cert->signature = NULL;
+    return cert;
 }
 
-void ssh_cert_get(ssh_cert *cert, BinarySource *src)
+void ssh_cert_get_suffix(ssh_cert *cert, BinarySource *src)
 {
     cert->serial = get_uint64(src);
     cert->type = get_uint32(src);
@@ -47,6 +47,26 @@ void ssh_cert_get(ssh_cert *cert, BinarySource *src)
     cert->reserved = get_strbuf(src);
     cert->signature_key = get_strbuf(src);
     cert->signature = get_strbuf(src);
+}
+
+void ssh_cert_put_prefix(ssh_cert *cert, BinarySink *sink)
+{
+    put_stringpl(sink, ptrlen_from_strbuf(cert->nonce));
+}
+
+void ssh_cert_put_suffix(ssh_cert *cert, BinarySink *sink)
+{
+    put_uint64(sink, cert->serial);
+    put_uint32(sink, cert->type);
+    put_stringpl(sink, ptrlen_from_strbuf(cert->key_id));
+    put_stringpl(sink, ptrlen_from_strbuf(cert->valid_principals));
+    put_uint64(sink, cert->valid_after);
+    put_uint64(sink, cert->valid_before);
+    put_stringpl(sink, ptrlen_from_strbuf(cert->critical_options));
+    put_stringpl(sink, ptrlen_from_strbuf(cert->extensions));
+    put_stringpl(sink, ptrlen_from_strbuf(cert->reserved));
+    put_stringpl(sink, ptrlen_from_strbuf(cert->signature_key));
+    put_stringpl(sink, ptrlen_from_strbuf(cert->signature));
 }
 
 void ssh_cert_free(ssh_cert *cert)
