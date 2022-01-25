@@ -730,7 +730,8 @@ enum {
     IDC_GIVEHELP,
     IDC_IMPORT,
     IDC_EXPORT_OPENSSH_AUTO, IDC_EXPORT_OPENSSH_NEW,
-    IDC_EXPORT_SSHCOM
+    IDC_EXPORT_SSHCOM,
+    IDC_IMPORT_CERT
 };
 
 static const int nokey_ids[] = { IDC_NOKEY, 0 };
@@ -778,6 +779,7 @@ void ui_set_state(HWND hwnd, struct MainDlgState *state, int status)
         EnableMenuItem(state->keymenu, IDC_KEYSSH2EDDSA,
                        MF_ENABLED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_IMPORT, MF_ENABLED|MF_BYCOMMAND);
+        EnableMenuItem(state->cvtmenu, IDC_IMPORT_CERT, MF_GRAYED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_EXPORT_OPENSSH_AUTO,
                        MF_GRAYED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_EXPORT_OPENSSH_NEW,
@@ -811,6 +813,7 @@ void ui_set_state(HWND hwnd, struct MainDlgState *state, int status)
         EnableMenuItem(state->keymenu, IDC_KEYSSH2EDDSA,
                        MF_GRAYED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_IMPORT, MF_GRAYED|MF_BYCOMMAND);
+        EnableMenuItem(state->cvtmenu, IDC_IMPORT_CERT, MF_GRAYED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_EXPORT_OPENSSH_AUTO,
                        MF_GRAYED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_EXPORT_OPENSSH_NEW,
@@ -844,6 +847,7 @@ void ui_set_state(HWND hwnd, struct MainDlgState *state, int status)
         EnableMenuItem(state->keymenu, IDC_KEYSSH2EDDSA,
                        MF_ENABLED|MF_BYCOMMAND);
         EnableMenuItem(state->cvtmenu, IDC_IMPORT, MF_ENABLED|MF_BYCOMMAND);
+        EnableMenuItem(state->cvtmenu, IDC_IMPORT_CERT, MF_ENABLED|MF_BYCOMMAND);
         /*
          * Enable export menu items if and only if the key type
          * supports this kind of export.
@@ -1136,6 +1140,65 @@ void load_key_file(HWND hwnd, struct MainDlgState *state,
     burnstr(passphrase);
 }
 
+void load_cert_file(HWND hwnd, struct MainDlgState *state,
+                    Filename *filename)
+{
+    int type;
+    char *comment = NULL;
+    const char *error = NULL;
+
+    type = key_type(filename);
+
+    if (type == SSH_KEYTYPE_SSH2_PUBLIC_OPENSSH) {
+        char *algorithm = NULL;
+        char *comment = NULL;      
+        strbuf *blob = strbuf_new();
+
+        if (ppk_loadpub_f(filename, &algorithm, BinarySink_UPCAST(blob), &comment, &error)) {
+            const ssh_keyalg *alg = find_pubkey_alg(algorithm);
+            if (alg) {
+                ssh_key *pubkey = ssh_key_new_pub(alg, ptrlen_from_strbuf(blob));
+                if (pubkey) {
+                    if (pubkey->cert) {
+                        if (state->ssh2key.key->cert)
+                            ssh_cert_free(state->ssh2key.key->cert);
+                        state->ssh2key.key->cert = pubkey->cert;
+                        pubkey->cert = NULL;
+                        // XXX what if key types are incompatible?
+                        state->ssh2key.key->vt = pubkey->vt;
+
+                        setupbigedit2(hwnd, IDC_KEYDISPLAY,
+                              IDC_PKSTATIC, &state->ssh2key);
+                    } else {
+                        error = "public key contains no certificate";
+                    }
+                    ssh_key_free(pubkey);
+                } else {
+                    error = "error reading public key";
+                }
+            } else {
+                error = "public key not recognized";
+            }
+        }
+
+        if (algorithm)
+            sfree(algorithm);
+        if (comment)
+            sfree(comment);
+        if (blob)
+            strbuf_free(blob);
+    } else {
+        error = "expected OpenSSH public key format";
+    }
+
+    if (error != NULL) {
+        char *msg = dupprintf("Failed to import certificate: %s", error);
+        message_box(hwnd, msg, "PuTTYgen Error", MB_OK | MB_ICONERROR,
+                    HELPCTXID(errors_cantloadkey));
+        sfree(msg);
+    }
+}
+
 static void start_generating_key(HWND hwnd, struct MainDlgState *state)
 {
     static const char generating_msg[] =
@@ -1249,6 +1312,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 
             menu1 = CreateMenu();
             AppendMenu(menu1, MF_ENABLED, IDC_IMPORT, "&Import key");
+            AppendMenu(menu1, MF_ENABLED, IDC_IMPORT_CERT, "Import &certificate");
             AppendMenu(menu1, MF_SEPARATOR, 0, 0);
             AppendMenu(menu1, MF_ENABLED, IDC_EXPORT_OPENSSH_AUTO,
                        "Export &OpenSSH key");
@@ -1815,6 +1879,21 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
                                    LOWORD(wParam) == IDC_LOAD)) {
                     Filename *fn = filename_from_str(filename);
                     load_key_file(hwnd, state, fn, LOWORD(wParam) != IDC_LOAD);
+                    filename_free(fn);
+                }
+            }
+            break;
+          case IDC_IMPORT_CERT:
+            if (HIWORD(wParam) != BN_CLICKED)
+                break;
+            state =
+                (struct MainDlgState *) GetWindowLongPtr(hwnd, GWLP_USERDATA);
+            if (!state->generation_thread_exists) {
+                char filename[FILENAME_MAX];
+                if (prompt_keyfile(hwnd, "Load certificate:", filename, false,
+                                   false)) {
+                    Filename *fn = filename_from_str(filename);
+                    load_cert_file(hwnd, state, fn);
                     filename_free(fn);
                 }
             }
